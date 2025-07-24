@@ -2,7 +2,7 @@
 <Response>
   <Say>Speak now.</Say>
   <Connect>
-    <Stream url="wss://de6bef435fe0.ngrok-free.app/streams">
+    <Stream url="wss://stunning-adventure-production-12ba.up.railway.app/streams">
       <Parameter name="aCustomParameter" value="aCustomValue that was set in TwiML" />
     </Stream>
   </Connect>
