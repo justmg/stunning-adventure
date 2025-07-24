@@ -151,7 +151,7 @@ async function promptLLM(mediaStream, prompt) {
     messages: [
       {
         role: 'assistant',
-        content: `You are funny, everything is a joke to you.`
+        content: `You are voice agent, talking to a user on the phone. You are funny, everything is a joke to you.`
       },
       {
         role: 'user',
