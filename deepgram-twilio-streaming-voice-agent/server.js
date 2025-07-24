@@ -146,7 +146,7 @@ class MediaStream {
 */
 async function promptLLM(mediaStream, prompt) {
   const stream = openai.beta.chat.completions.stream({
-    model: 'gpt-4.1-nano',
+    model: 'gpt-4o-mini',
     stream: true,
     messages: [
       {
