@@ -5,6 +5,90 @@ const path = require("path");
 const dotenv = require("dotenv");
 dotenv.config();
 
+// Database
+const { Client } = require('pg');
+
+// Database connection
+const dbClient = new Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+// Connect to database
+dbClient.connect()
+  .then(() => console.log('Connected to PostgreSQL database'))
+  .catch(err => console.error('Database connection error:', err));
+
+// Database helper functions
+async function createCall(callSid, fromNumber) {
+  try {
+    const result = await dbClient.query(
+      'INSERT INTO calls (call_sid, from_number, started_at) VALUES ($1, $2, $3) RETURNING id',
+      [callSid, fromNumber, new Date()]
+    );
+    console.log('Database: Call created with ID:', result.rows[0].id);
+    return result.rows[0].id;
+  } catch (error) {
+    console.error('Database: Error creating call:', error);
+    return null;
+  }
+}
+
+async function updateCallTranscript(callId, transcript) {
+  try {
+    await dbClient.query(
+      'UPDATE calls SET transcript = $1 WHERE id = $2',
+      [transcript, callId]
+    );
+    console.log('Database: Transcript updated for call:', callId);
+  } catch (error) {
+    console.error('Database: Error updating transcript:', error);
+  }
+}
+
+async function endCall(callId, finalTranscript) {
+  try {
+    await dbClient.query(
+      'UPDATE calls SET ended_at = $1, transcript = $2 WHERE id = $3',
+      [new Date(), finalTranscript, callId]
+    );
+    console.log('Database: Call ended:', callId);
+  } catch (error) {
+    console.error('Database: Error ending call:', error);
+  }
+}
+
+async function checkAlertKeywords(callId, transcript, fromNumber) {
+  try {
+    // Check for alert keywords in the transcript
+    // For now, check for emergency keywords
+    const emergencyKeywords = ['help', 'emergency', 'pain', 'fell', 'hurt', 'sick', 'hospital'];
+    const lowerTranscript = transcript.toLowerCase();
+    
+    const hasAlert = emergencyKeywords.some(keyword => lowerTranscript.includes(keyword));
+    
+    if (hasAlert) {
+      await dbClient.query(
+        'UPDATE calls SET alert_triggered = TRUE WHERE id = $1',
+        [callId]
+      );
+      console.log('Database: ALERT TRIGGERED for call:', callId, 'Keywords detected in:', transcript);
+      
+      // TODO: Send SMS/email alerts to family members
+      // This would integrate with alert_criteria table and notification system
+      
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Database: Error checking alert keywords:', error);
+    return false;
+  }
+}
+
 // Twilio
 const HttpDispatcher = require("httpdispatcher");
 const WebSocketServer = require("websocket").server;
@@ -96,6 +180,12 @@ class MediaStream {
 
     this.messages = [];
     this.repeatCount = 0;
+    
+    // Database tracking
+    this.callId = null;
+    this.fromNumber = null;
+    this.callSid = null;
+    this.transcript = '';
   }
 
   // Function to process incoming messages
@@ -107,6 +197,18 @@ class MediaStream {
       }
       if (data.event === "start") {
         console.log("twilio: Start event received: ", data);
+        
+        // Extract call information and create database record
+        this.callSid = data.streamSid;
+        this.fromNumber = data.start?.customParameters?.From || 'unknown';
+        
+        // Create call record in database
+        createCall(this.callSid, this.fromNumber)
+          .then(callId => {
+            this.callId = callId;
+            console.log('Database: Call tracking started for:', this.callSid);
+          })
+          .catch(err => console.error('Database: Failed to create call record:', err));
       }
       if (data.event === "media") {
         if (!this.hasSeenMedia) {
@@ -138,6 +240,13 @@ class MediaStream {
   // Function to handle connection close
   close() {
     console.log("twilio: Closed");
+    
+    // Save final transcript and end call record
+    if (this.callId && this.transcript) {
+      endCall(this.callId, this.transcript)
+        .then(() => console.log('Database: Call ended and transcript saved'))
+        .catch(err => console.error('Database: Error ending call:', err));
+    }
   }
 }
 
@@ -154,7 +263,7 @@ async function promptLLM(mediaStream, prompt) {
         content: `You are “Elder Companion,” a warm, patient phone companion speaking with an older adult.
 
 Objectives:
-1. Greet them by first name if known (use "friend" if unknown).
+1. Greet them by first name if known.
 2. Ask one simple open-ended question at a time about their day, meals, mood, or plans.
 3. Reflect back something they just said (“That sounds relaxing,” etc.) before moving on.
 4. Keep responses short: 1–2 sentences. Speak plainly. No emojis or markup.
@@ -308,6 +417,16 @@ const setupDeepgram = (mediaStream) => {
             const utterance = is_finals.join(" ");
             is_finals = [];
             console.log(`deepgram STT: [Speech Final] ${utterance}`);
+            
+            // Update transcript in MediaStream and database
+            mediaStream.transcript += (mediaStream.transcript ? ' ' : '') + utterance;
+            if (mediaStream.callId) {
+              updateCallTranscript(mediaStream.callId, mediaStream.transcript);
+              
+              // Check for alert keywords
+              checkAlertKeywords(mediaStream.callId, utterance, mediaStream.fromNumber);
+            }
+            
             llmStart = Date.now();
             promptLLM(mediaStream, utterance); // Send the final transcript to OpenAI for response
           } else {
@@ -336,6 +455,16 @@ const setupDeepgram = (mediaStream) => {
         const utterance = is_finals.join(" ");
         is_finals = [];
         console.log(`deepgram STT: [Speech Final] ${utterance}`);
+        
+        // Update transcript in MediaStream and database
+        mediaStream.transcript += (mediaStream.transcript ? ' ' : '') + utterance;
+        if (mediaStream.callId) {
+          updateCallTranscript(mediaStream.callId, mediaStream.transcript);
+          
+          // Check for alert keywords
+          checkAlertKeywords(mediaStream.callId, utterance, mediaStream.fromNumber);
+        }
+        
         llmStart = Date.now();
         promptLLM(mediaStream, utterance);
       }
