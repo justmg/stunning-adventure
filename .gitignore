@@ -24,6 +24,7 @@ Thumbs.db
 # Logs
 logs/
 *.log
+server.log
 
 # Build output
 dist/
@@ -36,3 +37,14 @@ coverage/
 # Temporary files
 tmp/
 temp/
+
+# Railway
+.railway/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Redis dumps
+dump.rdb
